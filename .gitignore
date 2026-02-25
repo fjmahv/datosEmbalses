@@ -1,0 +1,8 @@
+echo "BD-embalses.mdb" >> .gitignore
+echo "temp_embalses.zip" >> .gitignore
+echo "last_mdb_hash.txt" >> .gitignore
+echo "datos_embalses_optimizado.json" >> .gitignore
+echo "__pycache__/" >> .gitignore
+
+git add .gitignore
+git commit -m "chore: añadir gitignore"
