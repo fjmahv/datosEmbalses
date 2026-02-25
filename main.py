@@ -92,15 +92,31 @@ def calcular_estadisticas_embalse(df_embalse):
     if df_embalse.empty:
         return pd.Series()
 
+    # Aseguramos que está ordenado del más reciente al más antiguo
     df_embalse = df_embalse.sort_values('FECHA', ascending=False)
-    fecha_referencia = df_embalse['FECHA'].iloc[0] # El dato más reciente de este embalse
+    fecha_referencia = df_embalse['FECHA'].iloc[0] 
     mes_ref = fecha_referencia.month
     
-    # Filtros temporales
-    df_1s = df_embalse[df_embalse['FECHA'] >= fecha_referencia - pd.Timedelta(days=7)]
-    df_2s = df_embalse[df_embalse['FECHA'] >= fecha_referencia - pd.Timedelta(days=14)]
-    df_1m = df_embalse[df_embalse['FECHA'] >= fecha_referencia - pd.Timedelta(days=30)]
+    # Datos actuales
+    aa = df_embalse['AGUA_ACTUAL'].iloc[0]
+    at = df_embalse['AGUA_TOTAL'].iloc[0]
+
+    # --- CORRECCIÓN PARA VARIACIONES ---
+    # Excluimos la fecha actual para buscar únicamente en el histórico pasado
+    df_pasado = df_embalse[df_embalse['FECHA'] < fecha_referencia]
     
+    # m1s: Dato inmediatamente anterior (la "semana pasada" real)
+    # Si por algún motivo es un embalse nuevo sin histórico, usamos 'aa' para no romper nada
+    m1s = df_pasado['AGUA_ACTUAL'].iloc[0] if not df_pasado.empty else aa
+
+    # m2s: Dos semanas (buscamos un registro de hace al menos 13 días para evitar solapamientos)
+    df_2s = df_embalse[df_embalse['FECHA'] <= fecha_referencia - pd.Timedelta(days=13)]
+    m2s = df_2s['AGUA_ACTUAL'].iloc[0] if not df_2s.empty else m1s
+
+    # m1m: Un mes (buscamos un registro de hace al menos 27 días)
+    df_1m = df_embalse[df_embalse['FECHA'] <= fecha_referencia - pd.Timedelta(days=27)]
+    m1m = df_1m['AGUA_ACTUAL'].iloc[0] if not df_1m.empty else m2s
+
     # Filtros históricos del mismo mes
     df_hist_mes = df_embalse[df_embalse['FECHA'].dt.month == mes_ref]
     
@@ -116,12 +132,12 @@ def calcular_estadisticas_embalse(df_embalse):
                              (df_embalse['FECHA'].dt.month == mes_ref)]
 
     stats = {
-        'aa': round(df_embalse['AGUA_ACTUAL'].iloc[0], 2),
-        'at': round(df_embalse['AGUA_TOTAL'].iloc[0], 2),
+        'aa': round(aa, 2),
+        'at': round(at, 2),
         'f': fecha_referencia.strftime('%Y-%m-%d'),
-        'm1s': round(df_1s['AGUA_ACTUAL'].mean(), 2),
-        'm2s': round(df_2s['AGUA_ACTUAL'].mean(), 2),
-        'm1m': round(df_1m['AGUA_ACTUAL'].mean(), 2),
+        'm1s': round(m1s, 2),
+        'm2s': round(m2s, 2),
+        'm1m': round(m1m, 2),
         'ma1': round(df_anio_ant['AGUA_ACTUAL'].mean(), 2) if not df_anio_ant.empty else None,
         'h3a': round(media_historica(3), 2),
         'h5a': round(media_historica(5), 2),
@@ -130,7 +146,6 @@ def calcular_estadisticas_embalse(df_embalse):
         'ht': round(df_hist_mes['AGUA_ACTUAL'].mean(), 2)
     }
     return pd.Series(stats)
-
 def procesar_datos():
     with Progress(
         SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -140,7 +155,7 @@ def procesar_datos():
         # 1. Extracción con mdb-export
         task1 = progress.add_task("[yellow]Extrayendo datos MDB...", total=None)
         try:
-            proceso = subprocess.Popen(['mdb-export', MDB_FILE, TABLE_NAME], 
+            proceso = subprocess.Popen(['mdb-export', '-D', '%Y-%m-%d %H:%M:%S', MDB_FILE, TABLE_NAME], 
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             stdout, stderr = proceso.communicate()
             if proceso.returncode != 0:
@@ -159,7 +174,7 @@ def procesar_datos():
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col].str.replace(',', '.', regex=False), errors='coerce')
         
-        df['FECHA'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
+        df['FECHA'] = pd.to_datetime(df['FECHA'], errors='coerce')
         df = df.dropna(subset=['AGUA_TOTAL', 'AGUA_ACTUAL', 'AMBITO_NOMBRE', 'EMBALSE_NOMBRE', 'FECHA'])
         progress.update(task2, completed=100)
 
