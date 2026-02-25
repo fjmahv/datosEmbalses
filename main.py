@@ -5,6 +5,7 @@ import hashlib
 import zipfile
 import subprocess
 import io
+import shutil  # <-- ¡AQUÍ ESTÁ LA LIBRERÍA QUE FALTA!
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
@@ -14,9 +15,12 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 
 # --- CONFIGURACIÓN ---
+# ... (el resto de tu código sigue igual)
+
+# --- CONFIGURACIÓN ---
 URL_ZIPPED_DB = "https://www.miteco.gob.es/content/dam/miteco/es/agua/temas/evaluacion-de-los-recursos-hidricos/boletin-hidrologico/Historico-de-embalses/BD-Embalses.zip"
 ZIP_FILE = "temp_embalses.zip"
-MDB_FILE = "BD-embalses.mdb"
+MDB_FILE = "BD-Embalses.mdb"
 HASH_FILE = "last_mdb_hash.txt"
 JSON_OUTPUT = "datos_embalses_optimizado.json"
 TABLE_NAME = "T_Datos Embalses 1988-2026"
@@ -53,7 +57,7 @@ def get_file_hash(filepath):
     return hasher.hexdigest()
 
 def descargar_y_extraer():
-    """Descarga el ZIP, extrae el MDB y limpia temporales."""
+    """Descarga el ZIP, extrae dinámicamente el MDB y limpia temporales."""
     try:
         console.print(f"[cyan]Descargando datos desde:[/cyan] {URL_ZIPPED_DB}")
         response = requests.get(URL_ZIPPED_DB, stream=True, timeout=30)
@@ -64,12 +68,20 @@ def descargar_y_extraer():
                 f.write(chunk)
         
         with zipfile.ZipFile(ZIP_FILE, 'r') as zip_ref:
-            # Extraemos específicamente el MDB
-            zip_ref.extract(MDB_FILE)
+            # Buscamos el primer archivo que termine en .mdb (ignorando mayúsculas/minúsculas)
+            mdb_interno = next((nombre for nombre in zip_ref.namelist() if nombre.lower().endswith('.mdb')), None)
+            
+            if not mdb_interno:
+                raise FileNotFoundError("No se encontró ningún archivo .mdb dentro del ZIP de MITECO.")
+            
+            # Lo leemos directamente del ZIP y lo escribimos con nuestro nombre estándar
+            # Esto evita problemas si el archivo original venía metido en subcarpetas
+            with zip_ref.open(mdb_interno) as source, open(MDB_FILE, "wb") as target:
+                shutil.copyfileobj(source, target)
             
         # Limpieza inmediata para ahorrar espacio
         os.remove(ZIP_FILE)
-        console.print("[green]✔ Descarga y extracción completadas. ZIP eliminado.[/green]")
+        console.print(f"[green]✔ Descarga completada. MDB extraído dinámicamente ({mdb_interno}). ZIP eliminado.[/green]")
         
     except Exception as e:
         console.print(f"[bold red]✖ Error en la descarga/extracción: {e}[/bold red]")
@@ -160,8 +172,8 @@ def procesar_datos():
         df_agrupado.rename(columns={'AMBITO_NOMBRE': 'an', 'EMBALSE_NOMBRE': 'en'}, inplace=True)
         progress.update(task3, completed=100)
 
-        # 4. Exportación JSON compacta
-        task4 = progress.add_task("[yellow]Generando JSON optimizado...", total=None)
+# 4. Exportación JSON compacta e híbrida (Legible por humanos)
+        task4 = progress.add_task("[yellow]Generando JSON optimizado y legible...", total=None)
         
         # Manejo de NaNs (reemplazando por None para que JSON lo serialice como null)
         df_agrupado = df_agrupado.where(pd.notnull(df_agrupado), None)
@@ -171,9 +183,30 @@ def procesar_datos():
             "datos": df_agrupado.to_dict(orient='records')
         }
         
-        # indent=None y separators=(',', ':') elimina todos los espacios innecesarios
+        # --- ESCRITURA HÍBRIDA ---
         with open(JSON_OUTPUT, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, ensure_ascii=False, separators=(',', ':'))
+            # 1. Escribimos los metadatos con indentación normal
+            f.write('{\n  "metadatos": ')
+            json.dump(export_data["metadatos"], f, ensure_ascii=False, indent=2)
+            
+            # 2. Abrimos la lista de datos
+            f.write(',\n  "datos": [\n')
+            
+            # 3. Escribimos cada registro en una única línea
+            records = export_data["datos"]
+            for i, record in enumerate(records):
+                # separators=(',', ':') elimina espacios innecesarios dentro de la misma línea
+                json_str = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
+                f.write(f'    {json_str}')
+                
+                # Añadimos coma y salto de línea salvo en el último registro
+                if i < len(records) - 1:
+                    f.write(',\n')
+                else:
+                    f.write('\n')
+                    
+            # 4. Cerramos el JSON
+            f.write('  ]\n}\n')
         
         progress.update(task4, completed=100)
 
